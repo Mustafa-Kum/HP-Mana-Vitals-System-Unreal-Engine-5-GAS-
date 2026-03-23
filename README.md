@@ -34,7 +34,11 @@ This system takes a different approach:
  
 ## 🎮 Showcase
  
-> ⚠️ GIF coming soon — HP drop + trailing bar delay effect
+<div align="center">
+  <img src="Gifs/HPMana.gif" width="80%">
+  <p><em>HP and Mana bars with GAS-driven trailing effect — updates fire only on attribute change, zero tick polling.</em></p>
+</div>
+
  
 ---
  
