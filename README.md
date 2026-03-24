@@ -1,199 +1,362 @@
-# ⚔️ Building My RPG — Part 2: HP & Mana Vitals System (Unreal Engine 5 / GAS)
- 
-This is Part 2 of my ongoing series where I'm building a modular, AAA-style RPG system in Unreal Engine 5 — one system at a time.
-Each part is a self-contained, production-quality module. If you missed the earlier parts, I'm sharing them progressively as they're ready.
- 
-> 🎯 **Goal:** A fully modular RPG framework built on industry-standard patterns — GAS, SOLID principles, and reactive architecture.
- 
----
- 
-## 🧠 TL;DR
- 
-A fully reactive HP/Mana UI system built on GAS that:
-- Updates **only when attributes change** — zero tick polling
-- Uses a **dual-bar trailing system** for smooth damage feedback (WoW/FFXIV-style)
-- Derives vitals from primary stats via **data-driven scaling**
-- Is designed to be **plug & play** across any GAS-based project
- 
----
- 
-## 🚀 The Problem This Solves
- 
-Most beginner UI systems poll HP every frame with `Tick`. That works until it doesn't — at scale, it wastes CPU, couples UI tightly to gameplay logic, and breaks when stats change dynamically (buffs, level-ups, equipment).
- 
-This system takes a different approach:
- 
-| Problem | Solution |
-|:---|:---|
-| Tick polling | GAS `AttributeValueChangeDelegate` — fires only on actual changes |
-| Tight coupling | UI knows nothing about CharacterBase — only about ASC |
-| Stat scaling breaks UI | Proportional adjustment preserves current HP% on MaxHP change |
-| Hardcoded stats | `UCharacterDataAsset` drives all starting values |
- 
----
- 
-## 🎮 Showcase
- 
-<div align="center">
-  <img src="Gifs/HPMana.gif" width="80%">
-  <p><em>HP and Mana bars with GAS-driven trailing effect — updates fire only on attribute change, zero tick polling.</em></p>
-</div>
+# ⚔️ Building My RPG — Part 3: HP & Mana Vitals System (Unreal Engine 5 / GAS)
 
- 
+This is Part 3 of my ongoing series where I'm building a modular RPG framework in Unreal Engine 5, one gameplay system at a time.
+
+Each part focuses on a single production-minded system that can be studied, reused, and transplanted into other projects with minimal friction.
+
+> 🎯 **Goal:** Build a clean, modular RPG architecture around GAS, data-driven initialization, and event-driven UI.
+
 ---
- 
+
+## 🧠 TL;DR
+
+This module implements a reactive HP/Mana UI system on top of GAS that:
+
+- Updates attribute-driven UI only when values actually change
+- Uses a dual-bar trailing effect for clearer damage feedback
+- Preserves current HP/Mana percentages when **Stamina** or **Intellect** change max vitals
+- Initializes stats from a `UCharacterDataAsset` with safe fallback defaults
+- Keeps the widget decoupled from character classes by talking only to the `UAbilitySystemComponent`
+
+Important detail: the widget still uses `NativeTick`, but only to animate bar interpolation while the UI is catching up to the latest target value. It does **not** poll attributes every frame.
+
+---
+
+## 🚀 What Problem This Solves
+
+A lot of early UI implementations read HP and Mana every frame from the character and push the result straight into a progress bar. That works for prototypes, but it scales poorly and tightly couples UI to gameplay objects.
+
+This system takes a cleaner approach:
+
+| Problem | This module's approach |
+|:---|:---|
+| UI reads vitals every frame | Bind to GAS attribute change delegates |
+| Widget depends on concrete character class | Widget only receives a `UAbilitySystemComponent*` |
+| Max vital changes feel wrong | Current HP/Mana are adjusted proportionally when primary stat scaling changes the max |
+| Damage feedback feels abrupt | Use a delayed trailing bar for visual readability |
+| Missing data asset breaks setup | Fall back to safe default stats during character initialization |
+
+---
+
 ## 🏗️ Architecture
- 
-```
+
+```text
 [ UCharacterDataAsset ]
         ↓
-[ ACharacterBase / AHeroCharacter ]  ← Initializes GAS with starting stats
+[ ACharacterBase ]               ← Initializes starting stats
         ↓
-[ UCharacterAttributeSet ]           ← Owns all attributes, handles scaling
+[ UCharacterAttributeSet ]       ← Owns attributes and derived-stat rules
         ↓
-[ UAbilitySystemComponent ]          ← Fires attribute change delegates
+[ UAbilitySystemComponent ]      ← Broadcasts attribute change delegates
         ↓
-[ UPlayerVitalsWidget ]              ← Reactive UI, no polling
+[ UPlayerVitalsWidget ]          ← Reactive UI + animated bar interpolation
 ```
- 
-Four distinct layers, each with one responsibility. The UI has **zero knowledge** of the character — it only talks to the ASC.
- 
+
+The key separation is simple:
+
+- `ACharacterBase` handles startup stat initialization
+- `UCharacterAttributeSet` owns scaling and clamping rules
+- `UAbilitySystemComponent` broadcasts attribute changes
+- `UPlayerVitalsWidget` renders the result without knowing anything about the concrete character class
+
 ---
- 
+
 ## 🔑 Key Design Decisions
- 
-### 1. Event-Driven UI — Zero Tick Cost
- 
-The widget binds to GAS delegates in `InitializeVitals()` and never polls:
- 
+
+### 1. GAS-Driven UI Updates
+
+The widget binds directly to GAS delegates and refreshes its target values only when relevant attributes change.
+
 ```cpp
-// PlayerVitalsWidget.cpp
-CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetHealthAttribute())
-    .AddUObject(this, &UPlayerVitalsWidget::OnHealthChanged);
+void UPlayerVitalsWidget::BindToAbilitySystem(UAbilitySystemComponent* InASC)
+{
+    if (!InASC)
+    {
+        return;
+    }
+
+    InASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetHealthAttribute()).AddUObject(this, &UPlayerVitalsWidget::OnHealthChanged);
+    InASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetMaxHealthAttribute()).AddUObject(this, &UPlayerVitalsWidget::OnMaxHealthChanged);
+    InASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetManaAttribute()).AddUObject(this, &UPlayerVitalsWidget::OnManaChanged);
+    InASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetMaxManaAttribute()).AddUObject(this, &UPlayerVitalsWidget::OnMaxManaChanged);
+}
 ```
- 
-Delegates are cleaned up properly in `NativeDestruct()` to prevent dangling pointers:
- 
+
+Cleanup happens in `NativeDestruct()` so the widget does not leave stale delegate bindings behind.
+
 ```cpp
-CachedASC->GetGameplayAttributeValueChangeDelegate(...).RemoveAll(this);
+void UPlayerVitalsWidget::UnbindFromAbilitySystem()
+{
+    if (!CachedASC)
+    {
+        return;
+    }
+
+    CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetHealthAttribute()).RemoveAll(this);
+    CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetMaxHealthAttribute()).RemoveAll(this);
+    CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetManaAttribute()).RemoveAll(this);
+    CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetMaxManaAttribute()).RemoveAll(this);
+    CachedASC = nullptr;
+}
 ```
- 
+
+The result is event-driven attribute updates, with tick used only for short-lived visual interpolation.
+
 ---
- 
-### 2. Orchestrator Pattern in `PreAttributeChange`
- 
-Instead of a giant `if/else` block with inline logic, each scaling rule is delegated to a named helper. The orchestrator just dispatches:
- 
+
+### 2. AttributeSet Orchestration Instead of One Giant Branch
+
+`PreAttributeChange()` delegates work to focused helpers instead of burying every rule in one long block.
+
 ```cpp
-// CharacterAttributeSet.cpp
-if      (Attribute == GetStrengthAttribute())    RecalculateFromStrength(NewValue);
-else if (Attribute == GetAgilityAttribute())     RecalculateFromAgility(NewValue);
-else if (Attribute == GetStaminaAttribute())     RecalculateFromStamina(NewValue);
-else if (Attribute == GetIntellectAttribute())   RecalculateFromIntellect(NewValue);
-// ...
+void UCharacterAttributeSet::PreAttributeChange(const FGameplayAttribute& Attribute, float& NewValue)
+{
+    Super::PreAttributeChange(Attribute, NewValue);
+
+    if (HandleDerivedAttributeChange(Attribute, NewValue))
+    {
+        return;
+    }
+
+    HandleClampedVitalChange(Attribute, NewValue);
+}
 ```
- 
-Each helper is self-documenting and testable in isolation. Adding a new stat means adding one new method — nothing else changes.
- 
+
+Derived-stat rules are isolated behind named methods such as:
+
+- `RecalculateFromStrength`
+- `RecalculateFromAgility`
+- `RecalculateFromWeaponInterval`
+- `RecalculateFromIntellect`
+- `RecalculateFromStamina`
+
+That keeps the scaling logic readable and easy to extend.
+
 ---
- 
-### 3. Proportional Stat Scaling (DRY)
- 
-When Stamina increases MaxHealth, the current HP percentage is preserved — not the raw value. This single reusable helper handles both HP and Mana:
- 
+
+### 3. Proportional Vital Preservation
+
+When **Stamina** changes `MaxHealth`, or **Intellect** changes `MaxMana`, the current value is adjusted proportionally so the player keeps the same percentage.
+
 ```cpp
-void UCharacterAttributeSet::AdjustAttributeProportionally(
-    const FGameplayAttribute& CurrentAttr,
-    const FGameplayAttribute& MaxAttr,
-    float NewMax, float OldMax)
+void UCharacterAttributeSet::AdjustAttributeProportionally(const FGameplayAttribute& CurrentAttr, float NewMax, float OldMax)
 {
     if (OldMax <= 0.0f || NewMax == OldMax) return;
- 
+
+    UAbilitySystemComponent* ASC = GetOwningAbilitySystemComponent();
+    if (!ASC)
+    {
+        return;
+    }
+
     const float CurrentValue = CurrentAttr.GetNumericValue(this);
     const float NewCurrentValue = CurrentValue * (NewMax / OldMax);
- 
-    GetOwningAbilitySystemComponent()->SetNumericAttributeBase(CurrentAttr, NewCurrentValue);
+
+    ASC->SetNumericAttributeBase(CurrentAttr, NewCurrentValue);
 }
 ```
- 
-So if you have 60/100 HP and gain 50 Stamina (adding 500 MaxHP), you end up at 360/600 — not 60/600.
- 
+
+So if the player is at `60 / 100 HP` and a Stamina increase pushes max HP to `600`, the system keeps the same 60% ratio and moves the player to `360 / 600`.
+
+This proportional adjustment is currently applied through the **primary-stat scaling path** in the AttributeSet.
+
 ---
- 
-### 4. Trailing Bar System
- 
-Two progress bars per vital: one snaps immediately to the target, the other delays — giving the player a clear read on how much damage they just took.
- 
+
+### 4. Trailing Bar Feedback
+
+Each vital uses two bars:
+
+- A main bar that interpolates quickly toward the current target
+- A trailing bar that waits briefly on damage, then catches up more slowly
+
+That gives the player a clearer read on how much damage they just took.
+
 ```cpp
-// On damage: start the countdown
-InOutTrailingTimer = TrailingDelay; // default: 0.5s
- 
-// On healing or startup: snap both bars instantly
-if (NewTargetPercent >= InOutTargetPercent)
+void UPlayerVitalsWidget::UpdateTrailingState(float NewTargetPercent, float& InOutTargetPercent, float& InOutTrailingTimer, UProgressBar* TrailingBar)
 {
-    TrailingBar->SetPercent(NewTargetPercent);
-    InOutTrailingTimer = 999.0f; // disable trailing animation
+    if (NewTargetPercent >= InOutTargetPercent)
+    {
+        if (TrailingBar) TrailingBar->SetPercent(NewTargetPercent);
+        InOutTrailingTimer = 999.0f;
+    }
+    else
+    {
+        InOutTrailingTimer = TrailingDelay;
+    }
+
+    InOutTargetPercent = NewTargetPercent;
 }
 ```
- 
-After the delay, the trailing bar interpolates to match using `FInterpTo` at a configurable speed. All values are `EditDefaultsOnly` — tunable from Blueprint without recompiling.
- 
+
+A few implementation details:
+
+- Healing or startup snaps the **trailing** bar immediately
+- Damage starts a countdown before the trailing bar begins moving
+- The widget early-outs from `NativeTick()` when no interpolation is active
+
+This keeps the animation responsive without constantly doing unnecessary work.
+
 ---
- 
-### 5. Data-Driven Stats via `UCharacterDataAsset`
- 
-No hardcoded stats in constructors. The AttributeSet constructor is explicitly empty by design:
- 
+
+### 5. Data-Driven Startup with Safe Fallbacks
+
+The `UCharacterAttributeSet` constructor is intentionally empty. Initialization happens during character setup instead of hardcoding gameplay values in the AttributeSet itself.
+
 ```cpp
 UCharacterAttributeSet::UCharacterAttributeSet()
 {
-    // Stats are driven by UCharacterDataAsset, not hardcoded here.
-    // Violates SOLID OCP if you hardcode values here.
+    // Stats are initialized during character setup.
 }
 ```
- 
-All starting values come from `FCharacterStartingStats` inside `UCharacterDataAsset`, which inherits from `UPrimaryDataAsset` for async loading via the Asset Manager.
- 
----
- 
-## 📐 Stat Scaling Reference
- 
-| Primary Stat | Scales |
-|:---|:---|
-| **Stamina** | +10 MaxHealth per point |
-| **Intellect** | +15 MaxMana, +2.5 SpellDamage per point |
-| **Strength** | +2.0 AttackDamage per point |
-| **Agility** | +1% Haste → `FinalCastInterval = WeaponBaseInterval / (1 + Agility * 0.01)` |
- 
-MaxHealth and MaxMana changes trigger proportional adjustments to current values — HP/Mana percentage is always preserved.
- 
----
- 
-## 🔌 Integration
- 
+
+Starting values come from `FCharacterStartingStats` inside `UCharacterDataAsset`, including:
+
+- Primary stats
+- Base mana
+- Crit chance
+- Movement speed
+- Base physical damage
+- Base magic damage
+- Armor
+
+If no data asset is assigned, `ACharacterBase` applies safe fallback defaults so the character still initializes cleanly.
+
 ```cpp
-// In HeroCharacter::BeginPlay — one call to wire everything up
-UPlayerVitalsWidget* Widget = CreateWidget<UPlayerVitalsWidget>(PC, WidgetClass);
-Widget->AddToViewport();
-Widget->InitializeVitals(GetAbilitySystemComponent());
+if (CharacterClassData)
+{
+    ApplyStartingStats(CharacterClassData->StartingStats);
+}
+else
+{
+    FCharacterStartingStats FallbackStats;
+    // ...fill fallback defaults...
+    ApplyStartingStats(FallbackStats);
+}
 ```
- 
-Widget Blueprint requirements:
-- `HealthBar` + `TrailingHealthBar` — two `UProgressBar` bindings
-- `ManaBar` + `TrailingManaBar` — two `UProgressBar` bindings  
-- `HealthText` + `ManaText` — two `UTextBlock` bindings
- 
-Tunable parameters (exposed via `EditDefaultsOnly`):
-- `TrailingDelay` — how long before the trailing bar starts moving (default: 0.5s)
-- `MainBarInterpSpeed` — snap speed of the primary bar (default: 15.0)
-- `TrailingBarInterpSpeed` — lerp speed of the delayed bar (default: 3.0)
- 
+
+One important implementation detail: `MaxHealth` currently starts from a fixed base of `100.0f` in code, then scales upward through Stamina.
+
 ---
- 
-## 🧩 Part of a Larger System
- 
-Each part of this series is one module in a broader RPG architecture. Previous and upcoming systems:
- 
+
+## 📐 Stat Scaling Reference
+
+Current formulas in this repo:
+
+| Primary Stat | Result |
+|:---|:---|
+| **Strength** | `AttackDamage += 2.0` per point |
+| **Intellect** | `SpellDamage += 2.5` per point |
+| **Intellect** | `MaxMana += 15.0` per point |
+| **Stamina** | `MaxHealth += 10.0` per point |
+| **Agility** | Recalculates final `CastSpeed` interval from weapon interval |
+
+Agility uses this formula:
+
+```cpp
+FinalCastSpeed = WeaponBaseInterval / max(1.0 + Agility * 0.01, 0.1)
+```
+
+Notes:
+
+- Lower final interval means faster attacks/casts
+- Weapon swaps also trigger recalculation through `WeaponBaseInterval`
+- Current HP/Mana percentage is preserved when Stamina/Intellect scaling changes the max
+
+---
+
+## 🛡️ Robustness Notes
+
+This module also clamps vitals in two places:
+
+- During `PreAttributeChange()`
+- After gameplay effects execute in `PostGameplayEffectExecute()`
+
+That helps prevent invalid HP/Mana values from slipping through effect-driven changes.
+
+---
+
+## 🔌 Integration
+
+`AHeroCharacter` creates the widget for the local player and initializes it with the character's ASC.
+
+```cpp
+void AHeroCharacter::InitializeHUD()
+{
+    if (PlayerVitalsWidgetInstance || !PlayerVitalsWidgetClass || !IsLocalPlayerControlled())
+    {
+        return;
+    }
+
+    if (APlayerController* PC = GetPlayerController())
+    {
+        PlayerVitalsWidgetInstance = CreateWidget<UPlayerVitalsWidget>(PC, PlayerVitalsWidgetClass);
+        if (PlayerVitalsWidgetInstance)
+        {
+            PlayerVitalsWidgetInstance->AddToViewport();
+            PlayerVitalsWidgetInstance->InitializeVitals(GetAbilitySystemComponent());
+        }
+    }
+}
+```
+
+### Widget Blueprint Requirements
+
+Create a Blueprint subclass of `UPlayerVitalsWidget` and bind these exact widget names:
+
+- `HealthBar`
+- `TrailingHealthBar`
+- `ManaBar`
+- `TrailingManaBar`
+- `HealthText`
+- `ManaText`
+
+### Exposed Tuning Parameters
+
+These are available as `EditDefaultsOnly` on the widget:
+
+- `TrailingDelay` — delay before the trailing bar starts moving
+- `MainBarInterpSpeed` — interpolation speed of the main bar
+- `TrailingBarInterpSpeed` — interpolation speed of the delayed bar
+
+---
+
+## ✅ Requirements
+
+This implementation assumes:
+
+- Unreal Engine 5
+- Gameplay Ability System enabled
+- A valid `UAbilitySystemComponent` on the character
+- A registered `UCharacterAttributeSet`
+- UMG available for the widget layer
+
+Relevant module dependencies in this project include:
+
+- `GameplayAbilities`
+- `GameplayTasks`
+- `GameplayTags`
+- `UMG`
+- `Slate`
+- `SlateCore`
+
+---
+
+## 📦 Current Scope
+
+This repo covers the vitals layer only:
+
+- HP/Mana attributes
+- Derived-stat scaling rules
+- Reactive GAS-driven UI updates
+- Animated trailing bars
+- Data-driven startup values
+
+It does **not** try to be a full combat framework by itself yet. Things like full combat abilities, damage pipelines, death handling, buff/debuff systems, and enemy AI belong to later modules in the series.
+
+---
+
+## 🧩 Part of a Larger Series
+
 | # | System | Status |
 |:---|:---|:---|
 | 1 | Character Foundation (GAS setup, movement) | ✅ Released |
@@ -202,19 +365,21 @@ Each part of this series is one module in a broader RPG architecture. Previous a
 | 4 | Combat System (abilities, damage pipeline) | 🔜 Upcoming |
 | 5 | Enemy AI (Behavior Trees + GAS) | 🔜 Upcoming |
 | 6 | Inventory & Equipment | 🔜 Upcoming |
-| 7 | Buff/Debuff & Advanced Stat System | 🔜 Upcoming |
- 
+| 7 | Buff / Debuff & Advanced Stat System | 🔜 Upcoming |
+
 ---
- 
+
 ## 📌 Design Philosophy
- 
-- **Modularity first** — every system is portable and self-contained
-- **Event-driven over polling** — update only when something actually changes
-- **Data-driven over hardcoded** — designers configure, code doesn't care
-- **SOLID at every layer** — orchestrators, single-responsibility helpers, DIP where it matters
- 
+
+- **Modularity first** — each system should be understandable and reusable in isolation
+- **Event-driven where it matters** — attribute reads happen on change, not every frame
+- **Data-driven startup** — designers can configure class baselines without rewriting logic
+- **Focused responsibilities** — character setup, attribute logic, ASC notifications, and UI rendering each live in their own layer
+
 ---
- 
+
 ## 📄 License
- 
-Provided as a reference implementation for GAS-based UI systems. Feel free to use as a foundation for your own projects.
+
+Provided as a reference implementation for GAS-based RPG UI architecture.
+
+Feel free to study it, adapt it, and use it as a foundation for your own systems.
