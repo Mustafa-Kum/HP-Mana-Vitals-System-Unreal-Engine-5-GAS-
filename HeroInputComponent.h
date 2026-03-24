@@ -65,8 +65,11 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<ACharacterBase> OwnerCharacter;
 
+	TWeakObjectPtr<UEnhancedInputComponent> BoundInputComponent;
+
 	// Internal binding method
 	void BindInputActions(UEnhancedInputComponent* EnhancedInputComponent);
+	[[nodiscard]] bool ShouldBindInput(UEnhancedInputComponent* EnhancedInputComponent, ACharacterBase* InOwnerCharacter) const;
 
 	// AAA DRY: Single validation choke point — eliminates 10x repetitive null checks across all handlers
 	[[nodiscard]] bool IsOwnerValid() const;

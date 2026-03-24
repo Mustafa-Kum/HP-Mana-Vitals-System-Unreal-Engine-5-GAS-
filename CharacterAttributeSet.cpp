@@ -14,14 +14,12 @@ void UCharacterAttributeSet::PreAttributeChange(const FGameplayAttribute& Attrib
 {
 	Super::PreAttributeChange(Attribute, NewValue);
 
-	// AAA Orchestrator: Dispatch to named scaling helpers (Clean Code)
-	if      (Attribute == GetStrengthAttribute())             RecalculateFromStrength(NewValue);
-	else if (Attribute == GetAgilityAttribute())              RecalculateFromAgility(NewValue);
-	else if (Attribute == GetWeaponBaseIntervalAttribute())   RecalculateFromWeaponInterval(NewValue);
-	else if (Attribute == GetIntellectAttribute())            RecalculateFromIntellect(NewValue);
-	else if (Attribute == GetStaminaAttribute())              RecalculateFromStamina(NewValue);
-	else if (Attribute == GetHealthAttribute())               ClampHealth(NewValue);
-	else if (Attribute == GetManaAttribute())                 ClampMana(NewValue);
+	if (HandleDerivedAttributeChange(Attribute, NewValue))
+	{
+		return;
+	}
+
+	HandleClampedVitalChange(Attribute, NewValue);
 }
 
 // ==============================================================================
@@ -60,7 +58,7 @@ void UCharacterAttributeSet::RecalculateFromIntellect(float NewIntellect)
 	SetMaxMana(NewMaxMana);
 
 	// Proportional Mana Adjustment (AAA Standard: Maintains current % during buff/debuff)
-	AdjustAttributeProportionally(GetManaAttribute(), GetMaxManaAttribute(), NewMaxMana, OldMaxMana);
+	AdjustAttributeProportionally(GetManaAttribute(), NewMaxMana, OldMaxMana);
 }
 
 void UCharacterAttributeSet::RecalculateFromStamina(float NewStamina)
@@ -72,7 +70,7 @@ void UCharacterAttributeSet::RecalculateFromStamina(float NewStamina)
 	SetMaxHealth(NewMaxHealth);
 
 	// Proportional Health Adjustment
-	AdjustAttributeProportionally(GetHealthAttribute(), GetMaxHealthAttribute(), NewMaxHealth, OldMaxHealth);
+	AdjustAttributeProportionally(GetHealthAttribute(), NewMaxHealth, OldMaxHealth);
 }
 
 void UCharacterAttributeSet::ClampHealth(float& NewValue) const
@@ -85,17 +83,23 @@ void UCharacterAttributeSet::ClampMana(float& NewValue) const
 	NewValue = FMath::Clamp(NewValue, 0.0f, GetMaxMana());
 }
 
-void UCharacterAttributeSet::AdjustAttributeProportionally(const FGameplayAttribute& CurrentAttr, const FGameplayAttribute& MaxAttr, float NewMax, float OldMax)
+void UCharacterAttributeSet::AdjustAttributeProportionally(const FGameplayAttribute& CurrentAttr, float NewMax, float OldMax)
 {
 	// Processing
 	if (OldMax <= 0.0f || NewMax == OldMax) return;
+
+	UAbilitySystemComponent* ASC = GetOwningAbilitySystemComponent();
+	if (!ASC)
+	{
+		return;
+	}
 
 	const float CurrentValue = CurrentAttr.GetNumericValue(this);
 	const float NewCurrentValue = CurrentValue * (NewMax / OldMax);
 
 	// Execution
 	// Internal implementation helper: SetNumericAttributeBase bypasses some validation but is efficient for relative adjustments
-	GetOwningAbilitySystemComponent()->SetNumericAttributeBase(CurrentAttr, NewCurrentValue);
+	ASC->SetNumericAttributeBase(CurrentAttr, NewCurrentValue);
 }
 
 float UCharacterAttributeSet::CalculateHastedInterval(float BaseInterval, float AgilityValue) const
@@ -109,20 +113,75 @@ void UCharacterAttributeSet::PostGameplayEffectExecute(const FGameplayEffectModC
 {
 	Super::PostGameplayEffectExecute(Data);
 
-	const FGameplayAttribute& Attr = Data.EvaluatedData.Attribute;
+	ClampPostEffectAttribute(Data.EvaluatedData.Attribute);
+}
 
-	// AAA Orchestration: Route to standard clamping rules
-	if (Attr == GetHealthAttribute())
+bool UCharacterAttributeSet::HandleDerivedAttributeChange(const FGameplayAttribute& Attribute, float& NewValue)
+{
+	if (Attribute == GetStrengthAttribute())
+	{
+		RecalculateFromStrength(NewValue);
+		return true;
+	}
+
+	if (Attribute == GetAgilityAttribute())
+	{
+		RecalculateFromAgility(NewValue);
+		return true;
+	}
+
+	if (Attribute == GetWeaponBaseIntervalAttribute())
+	{
+		RecalculateFromWeaponInterval(NewValue);
+		return true;
+	}
+
+	if (Attribute == GetIntellectAttribute())
+	{
+		RecalculateFromIntellect(NewValue);
+		return true;
+	}
+
+	if (Attribute == GetStaminaAttribute())
+	{
+		RecalculateFromStamina(NewValue);
+		return true;
+	}
+
+	return false;
+}
+
+bool UCharacterAttributeSet::HandleClampedVitalChange(const FGameplayAttribute& Attribute, float& NewValue) const
+{
+	if (Attribute == GetHealthAttribute())
+	{
+		ClampHealth(NewValue);
+		return true;
+	}
+
+	if (Attribute == GetManaAttribute())
+	{
+		ClampMana(NewValue);
+		return true;
+	}
+
+	return false;
+}
+
+void UCharacterAttributeSet::ClampPostEffectAttribute(const FGameplayAttribute& Attribute)
+{
+	if (Attribute == GetHealthAttribute())
 	{
 		float Value = GetHealth();
 		ClampHealth(Value);
 		SetHealth(Value);
+		return;
 	}
-	else if (Attr == GetManaAttribute())
+
+	if (Attribute == GetManaAttribute())
 	{
 		float Value = GetMana();
 		ClampMana(Value);
 		SetMana(Value);
 	}
 }
-

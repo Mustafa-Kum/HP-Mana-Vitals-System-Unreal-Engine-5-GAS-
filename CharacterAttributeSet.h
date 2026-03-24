@@ -28,6 +28,9 @@ public:
 
 private:
 	// SOLID Helpers: Each scaling rule extracted from PreAttributeChange (Orchestrator Pattern)
+	bool HandleDerivedAttributeChange(const FGameplayAttribute& Attribute, float& NewValue);
+	bool HandleClampedVitalChange(const FGameplayAttribute& Attribute, float& NewValue) const;
+	void ClampPostEffectAttribute(const FGameplayAttribute& Attribute);
 	void RecalculateFromStrength(float NewStrength);
 	void RecalculateFromAgility(float NewAgility);
 	void RecalculateFromWeaponInterval(float NewInterval);
@@ -37,7 +40,7 @@ private:
 	void ClampMana(float& NewValue) const;
 
 	// DRY: Proportional current value adjustment when Max changes (Stamina/Intellect scaling)
-	void AdjustAttributeProportionally(const FGameplayAttribute& CurrentAttr, const FGameplayAttribute& MaxAttr, float NewMax, float OldMax);
+	void AdjustAttributeProportionally(const FGameplayAttribute& CurrentAttr, float NewMax, float OldMax);
 
 	// DRY: Pure formula for Agility -> Haste conversion
 	[[nodiscard]] float CalculateHastedInterval(float BaseInterval, float AgilityValue) const;

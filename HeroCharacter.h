@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Characters/CharacterBase.h"
+#include "Components/CombatComponent.h"
 #include "InputActionValue.h"
 #include "HeroCharacter.generated.h"
 
@@ -17,7 +18,6 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
-	virtual void Tick(float DeltaTime) override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
 public:
@@ -38,6 +38,11 @@ public:
 	virtual void ToggleCombat() override;
 	virtual void ToggleInventory() override;
 	virtual void TestVitals() override;
+	virtual void ResetCombatComboState() override;
+	virtual void SetComboAdvanceWindowEnabled(bool bEnabled) override;
+	virtual void SetAttackMoveInterruptWindowEnabled(bool bEnabled) override;
+	virtual void SetAttackMoveInterruptBlendOutTime(float BlendOutTime) override;
+	virtual void TryInterruptAttackForMovement() override;
 
 private:
 	/** --- COMPONENTS (AAA Layout) --- */
@@ -47,11 +52,20 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<class UHeroCameraComponent> HeroCameraComp;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<class USpringArmComponent> CameraBoom;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<class UCameraComponent> FollowCamera;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Movement", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<class UHeroLocomotionComponent> HeroLocomotionComp;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Inventory", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<class UInventoryComponent> InventoryComp;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<class UCombatComponent> CombatComp;
 
 	/** --- UI CONFIGURATION --- */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
@@ -85,6 +99,7 @@ private:
 	void SetCharacterYawDecoupled(bool bIsDecoupled);
 	void ConfigureRotationSettings(bool bIsDecoupled);
 	void SetMouseCursorVisibility(bool bIsVisible);
+	[[nodiscard]] bool IsLocalPlayerControlled() const;
 
 	// DRY: Shared PlayerController accessor (eliminates repeated casts)
 	[[nodiscard]] APlayerController* GetPlayerController() const;
@@ -96,7 +111,7 @@ private:
 	void HandleCombatTagChange(UAbilitySystemComponent* ASC, bool bEnteringCombat);
 	void ApplyCombatStateMovementOverrides();
 	void RevertCombatStateMovementOverrides();
-	void AutoEquipWeaponOnCombatEnter();
+	[[nodiscard]] bool PrepareCombatLoadout();
 
 	// Locomotion Predicates
 	[[nodiscard]] bool CanMove() const;

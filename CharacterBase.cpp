@@ -43,6 +43,8 @@ ACharacterBase::ACharacterBase()
 
 	BootsMeshComp = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("BootsMeshComp"));
 	BootsMeshComp->SetupAttachment(GetMesh());
+
+	bWantsWeaponArmed = 0;
 }
 
 void ACharacterBase::BeginPlay()
@@ -180,7 +182,6 @@ void ACharacterBase::RemoveItemStats(UItemDataAsset* ItemData)
 	if (UWeaponDataAsset* WeaponData = Cast<UWeaponDataAsset>(ItemData))
 	{
 		AbilitySystemComponent->ApplyModToAttributeUnsafe(UCharacterAttributeSet::GetWeaponBaseIntervalAttribute(), EGameplayModOp::Override, 0.0f);
-		AbilitySystemComponent->ApplyModToAttributeUnsafe(UCharacterAttributeSet::GetCastSpeedAttribute(), EGameplayModOp::Override, 0.0f);
 		AbilitySystemComponent->ApplyModToAttributeUnsafe(UCharacterAttributeSet::GetAttackDamageAttribute(), EGameplayModOp::Additive, -WeaponData->WeaponData.BaseDamage);
 	}
 
@@ -222,7 +223,7 @@ void ACharacterBase::OnWeaponMeshLoaded(UWeaponDataAsset* LoadedWeaponData)
 	if (IsWeaponLoadValid(LoadedWeaponData))
 	{
 		ApplyWeaponMesh(LoadedWeaponData);
-		SnapWeaponToInitialSocket(LoadedWeaponData);
+		AttachLoadedWeaponToDesiredSocket(LoadedWeaponData);
 	}
 }
 
@@ -240,17 +241,17 @@ void ACharacterBase::ApplyWeaponMesh(UWeaponDataAsset* LoadedWeaponData)
 	}
 }
 
-void ACharacterBase::SnapWeaponToInitialSocket(UWeaponDataAsset* LoadedWeaponData)
+void ACharacterBase::AttachLoadedWeaponToDesiredSocket(UWeaponDataAsset* LoadedWeaponData)
 {
-	// Başlangıçta silahı direkt olarak sırtına (Holster) koyalım, daha Equip edilmedi
-	AttachWeaponToSocket(LoadedWeaponData->WeaponData.HolsterSocketName);
+	AttachWeaponToSocket(GetDesiredWeaponSocketName(LoadedWeaponData));
 }
 
 void ACharacterBase::OnWeaponEquipNotify()
 {
 	if (CanProcessWeaponNotify())
 	{
-		AttachWeaponToSocket(CurrentWeaponData->WeaponData.EquipSocketName);
+		bWantsWeaponArmed = 1;
+		AttachWeaponToSocket(GetDesiredWeaponSocketName(CurrentWeaponData));
 		SetArmedState(true);
 	}
 
@@ -262,7 +263,8 @@ void ACharacterBase::OnWeaponUnequipNotify()
 	// Animasyon o frame'e geldiğinde (Kılıç sırta girdiği an) çalışır
 	if (CanProcessWeaponNotify())
 	{
-		AttachWeaponToSocket(CurrentWeaponData->WeaponData.HolsterSocketName);
+		bWantsWeaponArmed = 0;
+		AttachWeaponToSocket(GetDesiredWeaponSocketName(CurrentWeaponData));
 		SetArmedState(false);
 	}
 
@@ -276,6 +278,7 @@ void ACharacterBase::ClearWeaponMesh()
 		WeaponMeshComp->SetStaticMesh(nullptr);
 	}
 	CurrentWeaponData = nullptr;
+	bWantsWeaponArmed = 0;
 }
 
 // ==============================================================================
@@ -290,6 +293,16 @@ bool ACharacterBase::CanProcessWeaponNotify() const
 void ACharacterBase::AttachWeaponToSocket(FName SocketName)
 {
 	WeaponMeshComp->AttachToComponent(GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, SocketName);
+}
+
+FName ACharacterBase::GetDesiredWeaponSocketName(const UWeaponDataAsset* WeaponData) const
+{
+	if (!WeaponData)
+	{
+		return NAME_None;
+	}
+
+	return bWantsWeaponArmed ? WeaponData->WeaponData.EquipSocketName : WeaponData->WeaponData.HolsterSocketName;
 }
 
 void ACharacterBase::ToggleGameplayTagPair(UAbilitySystemComponent* ASC, const FGameplayTag& TagToRemove, const FGameplayTag& TagToAdd)
@@ -333,18 +346,43 @@ void ACharacterBase::UpdateEquipmentMesh(EEquipmentSlot Slot, TSoftObjectPtr<USk
 
 	if (MeshAsset.IsNull())
 	{
+		PendingEquipmentMeshes.Remove(Slot);
 		TargetComp->SetSkeletalMesh(nullptr);
 		return;
 	}
 
-	// TODO: Convert to async load (RequestAsyncLoad) for hitch-free armor equipping in production
-	TargetComp->SetSkeletalMesh(MeshAsset.LoadSynchronous());
+	PendingEquipmentMeshes.Add(Slot, MeshAsset);
+
+	if (MeshAsset.IsPending())
+	{
+		FStreamableDelegate Delegate = FStreamableDelegate::CreateWeakLambda(this, [this, Slot, MeshAsset]()
+		{
+			if (PendingEquipmentMeshes.FindRef(Slot) != MeshAsset || !MeshAsset.IsValid())
+			{
+				return;
+			}
+
+			if (USkeletalMeshComponent* LoadedTargetComp = GetMeshComponentForSlot(Slot))
+			{
+				LoadedTargetComp->SetSkeletalMesh(MeshAsset.Get());
+			}
+		});
+
+		UAssetManager::GetStreamableManager().RequestAsyncLoad(MeshAsset.ToSoftObjectPath(), Delegate);
+		return;
+	}
+
+	if (MeshAsset.IsValid())
+	{
+		TargetComp->SetSkeletalMesh(MeshAsset.Get());
+	}
 }
 
 void ACharacterBase::ClearEquipmentMesh(EEquipmentSlot Slot)
 {
 	if (USkeletalMeshComponent* TargetComp = GetMeshComponentForSlot(Slot))
 	{
+		PendingEquipmentMeshes.Remove(Slot);
 		TargetComp->SetSkeletalMesh(nullptr);
 	}
 }

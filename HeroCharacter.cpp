@@ -4,7 +4,9 @@
 #include "Characters/HeroLocomotionComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "GameFramework/SpringArmComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Camera/CameraComponent.h"
 #include "Components/InventoryComponent.h"
 #include "DataAssets/WeaponDataAsset.h"
 #include "AbilitySystemComponent.h"
@@ -16,9 +18,9 @@
 
 AHeroCharacter::AHeroCharacter()
 {
-	// Enable tick for camera auto-alignment logic
-	PrimaryActorTick.bCanEverTick = true;
-	PrimaryActorTick.bStartWithTickEnabled = true;
+	// Character orchestration stays event-driven; camera and locomotion own their own ticks.
+	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bStartWithTickEnabled = false;
 
 	// The character should not rotate with the camera
 	bUseControllerRotationPitch = false;
@@ -39,11 +41,21 @@ AHeroCharacter::AHeroCharacter()
 	// Camera Component Setup
 	HeroCameraComp = CreateDefaultSubobject<UHeroCameraComponent>(TEXT("HeroCameraComponent"));
 
+	// Lifecycle-safe camera rig creation belongs in the actor constructor.
+	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
+	CameraBoom->SetupAttachment(GetRootComponent());
+
+	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
+	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+
 	// Locomotion Component Setup
 	HeroLocomotionComp = CreateDefaultSubobject<UHeroLocomotionComponent>(TEXT("HeroLocomotionComponent"));
 
 	// Inventory Setup
 	InventoryComp = CreateDefaultSubobject<UInventoryComponent>(TEXT("InventoryComponent"));
+
+	// Combat Setup
+	CombatComp = CreateDefaultSubobject<UCombatComponent>(TEXT("CombatComponent"));
 }
 
 void AHeroCharacter::BeginPlay()
@@ -58,7 +70,7 @@ void AHeroCharacter::BeginPlay()
 
 void AHeroCharacter::InitializePlayerInputState()
 {
-	if (APlayerController* PC = GetPlayerController())
+	if (APlayerController* PC = GetPlayerController(); PC && IsLocalPlayerControlled())
 	{
 		PC->bShowMouseCursor = true;
 		
@@ -83,16 +95,18 @@ void AHeroCharacter::InitializeComponents()
 
 void AHeroCharacter::InitializeHUD()
 {
-	if (PlayerVitalsWidgetClass)
+	if (PlayerVitalsWidgetInstance || !PlayerVitalsWidgetClass || !IsLocalPlayerControlled())
 	{
-		if (APlayerController* PC = GetPlayerController())
+		return;
+	}
+
+	if (APlayerController* PC = GetPlayerController())
+	{
+		PlayerVitalsWidgetInstance = CreateWidget<UPlayerVitalsWidget>(PC, PlayerVitalsWidgetClass);
+		if (PlayerVitalsWidgetInstance)
 		{
-			PlayerVitalsWidgetInstance = CreateWidget<UPlayerVitalsWidget>(PC, PlayerVitalsWidgetClass);
-			if (PlayerVitalsWidgetInstance)
-			{
-				PlayerVitalsWidgetInstance->AddToViewport();
-				PlayerVitalsWidgetInstance->InitializeVitals(GetAbilitySystemComponent());
-			}
+			PlayerVitalsWidgetInstance->AddToViewport();
+			PlayerVitalsWidgetInstance->InitializeVitals(GetAbilitySystemComponent());
 		}
 	}
 }
@@ -102,16 +116,6 @@ void AHeroCharacter::InitializeCombatState()
 	if (UAbilitySystemComponent* ASC = GetAbilitySystemComponent())
 	{
 		ASC->AddLooseGameplayTag(WoWCloneTags::State_Uncombat);
-	}
-}
-
-void AHeroCharacter::Tick(float DeltaTime)
-{
-	Super::Tick(DeltaTime);
-	
-	if (HeroLocomotionComp)
-	{
-		HeroLocomotionComp->UpdateLocomotionState(DeltaTime);
 	}
 }
 
@@ -148,6 +152,9 @@ void AHeroCharacter::Move(const FInputActionValue& Value)
 	if (!CanMove() || !HeroLocomotionComp) return;
 
 	const FVector2D ProcessedInput = HeroLocomotionComp->GetNormalizedAndScaledMovementInput(Value.Get<FVector2D>());
+	if (ProcessedInput.IsNearlyZero()) return;
+
+	TryInterruptAttackForMovement();
 
 	AddMovementInput(GetMovementDirection(EAxis::X), ProcessedInput.X);
 	AddMovementInput(GetMovementDirection(EAxis::Y), ProcessedInput.Y);
@@ -166,6 +173,9 @@ FVector AHeroCharacter::GetMovementDirection(EAxis::Type Axis) const
 
 void AHeroCharacter::Look(const FInputActionValue& Value)
 {
+	// Disallow camera rotation if Left Click is pressed (Action Combat style)
+	if (bIsLeftClickPressed) return;
+
 	const FVector2D LookAxisVector = Value.Get<FVector2D>();
 
 	if (Controller != nullptr && !LookAxisVector.IsZero())
@@ -220,13 +230,17 @@ void AHeroCharacter::ConfigureRotationSettings(bool bIsDecoupled)
 void AHeroCharacter::LeftClickStarted()
 {
 	bIsLeftClickPressed = 1;
-	SetMouseCursorVisibility(false);
+
+	if (CombatComp)
+	{
+		CombatComp->ProcessAttack();
+	}
 }
 
 void AHeroCharacter::LeftClickCompleted()
 {
 	bIsLeftClickPressed = 0;
-	SetMouseCursorVisibility(true);
+	// No longer hiding/showing cursor here to avoid conflict with look input
 }
 
 void AHeroCharacter::SetMouseCursorVisibility(bool bIsVisible)
@@ -286,7 +300,13 @@ void AHeroCharacter::ToggleCombat()
 
 void AHeroCharacter::ToggleCombatState(UAbilitySystemComponent* ASC)
 {
-	bIsInCombat = !bIsInCombat;
+	const bool bEnteringCombat = !bIsInCombat;
+	if (bEnteringCombat && !PrepareCombatLoadout())
+	{
+		return;
+	}
+
+	bIsInCombat = bEnteringCombat;
 	bIsInCombat ? EnterCombatState(ASC) : ExitCombatState(ASC);
 }
 
@@ -294,7 +314,6 @@ void AHeroCharacter::EnterCombatState(UAbilitySystemComponent* ASC)
 {
 	HandleCombatTagChange(ASC, true);
 	ApplyCombatStateMovementOverrides();
-	AutoEquipWeaponOnCombatEnter();
 }
 
 void AHeroCharacter::ExitCombatState(UAbilitySystemComponent* ASC)
@@ -327,12 +346,14 @@ void AHeroCharacter::RevertCombatStateMovementOverrides()
 	}
 }
 
-void AHeroCharacter::AutoEquipWeaponOnCombatEnter()
+bool AHeroCharacter::PrepareCombatLoadout()
 {
-	if (InventoryComp && !InventoryComp->HasItemEquippedAtSlot(EEquipmentSlot::MainHand))
+	if (!InventoryComp)
 	{
-		InventoryComp->EquipItemAtIndex(0, EEquipmentSlot::MainHand);
+		return true;
 	}
+
+	return InventoryComp->PrepareWeaponForCombat();
 }
 
 void AHeroCharacter::ToggleInventory()
@@ -345,7 +366,7 @@ void AHeroCharacter::ToggleInventory()
 
 void AHeroCharacter::EnsureInventoryWidgetCreated()
 {
-	if (InventoryWidgetInstance || !InventoryWidgetClass) return;
+	if (InventoryWidgetInstance || !InventoryWidgetClass || !IsLocalPlayerControlled()) return;
 
 	if (APlayerController* PC = GetPlayerController())
 	{
@@ -372,7 +393,7 @@ void AHeroCharacter::ToggleInventoryVisibility()
 void AHeroCharacter::SetInputModeForInventory(bool bInventoryOpen)
 {
 	APlayerController* PC = GetPlayerController();
-	if (!PC) return;
+	if (!PC || !IsLocalPlayerControlled()) return;
 
 	// Global mouse visibility rule for this project
 	PC->bShowMouseCursor = true;
@@ -393,6 +414,16 @@ APlayerController* AHeroCharacter::GetPlayerController() const
 	return Cast<APlayerController>(GetController());
 }
 
+bool AHeroCharacter::IsLocalPlayerControlled() const
+{
+	if (const APlayerController* PC = GetPlayerController())
+	{
+		return PC->IsLocalPlayerController();
+	}
+
+	return false;
+}
+
 void AHeroCharacter::TestVitals()
 {
 	if (UAbilitySystemComponent* ASC = GetAbilitySystemComponent())
@@ -400,5 +431,45 @@ void AHeroCharacter::TestVitals()
 		// Directly deduct 20 HP and 20 Mana for testing UI smoothness
 		ASC->ApplyModToAttributeUnsafe(UCharacterAttributeSet::GetHealthAttribute(), EGameplayModOp::Additive, -20.0f);
 		ASC->ApplyModToAttributeUnsafe(UCharacterAttributeSet::GetManaAttribute(), EGameplayModOp::Additive, -20.0f);
+	}
+}
+
+void AHeroCharacter::ResetCombatComboState()
+{
+	if (CombatComp)
+	{
+		CombatComp->ResetCombo();
+	}
+}
+
+void AHeroCharacter::SetComboAdvanceWindowEnabled(bool bEnabled)
+{
+	if (CombatComp)
+	{
+		CombatComp->SetCanAdvanceCombo(bEnabled);
+	}
+}
+
+void AHeroCharacter::SetAttackMoveInterruptWindowEnabled(bool bEnabled)
+{
+	if (CombatComp)
+	{
+		CombatComp->SetCanInterruptAttackForMovement(bEnabled);
+	}
+}
+
+void AHeroCharacter::SetAttackMoveInterruptBlendOutTime(float BlendOutTime)
+{
+	if (CombatComp)
+	{
+		CombatComp->SetAttackInterruptBlendOutTime(BlendOutTime);
+	}
+}
+
+void AHeroCharacter::TryInterruptAttackForMovement()
+{
+	if (CombatComp)
+	{
+		CombatComp->TryInterruptAttackForMovement();
 	}
 }

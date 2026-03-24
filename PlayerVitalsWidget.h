@@ -63,6 +63,8 @@ private:
 	void OnMaxHealthChanged(const FOnAttributeChangeData& Data);
 	void OnManaChanged(const FOnAttributeChangeData& Data);
 	void OnMaxManaChanged(const FOnAttributeChangeData& Data);
+	void BindToAbilitySystem(UAbilitySystemComponent* InASC);
+	void UnbindFromAbilitySystem();
 
 	// --- TICK ORCHESTRATION ---
 	void ProcessAllInterpolations(float DeltaTime);
@@ -85,6 +87,7 @@ private:
 
 	// DRY: Pure formatting helper
 	[[nodiscard]] static FString FormatVitalText(float Current, float Max);
+	[[nodiscard]] bool HasActiveInterpolation() const;
 
 	// --- Internal State ---
 	UPROPERTY(Transient)

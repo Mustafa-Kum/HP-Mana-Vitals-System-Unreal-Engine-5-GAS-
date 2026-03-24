@@ -80,6 +80,13 @@ public:
 	virtual void ToggleInventory() {}
 	virtual void TestVitals() {}
 
+	// --- ANIMATION-COMBAT HOOKS ---
+	virtual void ResetCombatComboState() {}
+	virtual void SetComboAdvanceWindowEnabled(bool bEnabled) {}
+	virtual void SetAttackMoveInterruptWindowEnabled(bool bEnabled) {}
+	virtual void SetAttackMoveInterruptBlendOutTime(float BlendOutTime) {}
+	virtual void TryInterruptAttackForMovement() {}
+
 	// InventoryComponent tetikler, montaj süresince bekleyeceğimiz hedef silahı kaydeder
 	virtual void SetPendingWeapon(class UWeaponDataAsset* InitialWeaponData);
 
@@ -89,7 +96,7 @@ protected:
 	
 	[[nodiscard]] bool IsWeaponLoadValid(class UWeaponDataAsset* LoadedWeaponData) const;
 	void ApplyWeaponMesh(class UWeaponDataAsset* LoadedWeaponData);
-	void SnapWeaponToInitialSocket(class UWeaponDataAsset* LoadedWeaponData);
+	void AttachLoadedWeaponToDesiredSocket(class UWeaponDataAsset* LoadedWeaponData);
 
 	// AAA DRY: Shared tag-swap utility used by SetArmedState and subclass combat tag toggles
 	void ToggleGameplayTagPair(class UAbilitySystemComponent* ASC, const FGameplayTag& TagToRemove, const FGameplayTag& TagToAdd);
@@ -101,6 +108,7 @@ private:
 	// DRY Helpers: Eliminate duplication between Equip/Unequip notify methods
 	[[nodiscard]] bool CanProcessWeaponNotify() const;
 	void AttachWeaponToSocket(FName SocketName);
+	[[nodiscard]] FName GetDesiredWeaponSocketName(const class UWeaponDataAsset* WeaponData) const;
 	void SetArmedState(bool bIsArmed);
 
 	// DRY: Unified stat initialization from a stats struct
@@ -150,8 +158,11 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<class UWeaponDataAsset> CurrentWeaponData;
 
+	uint8 bWantsWeaponArmed : 1;
+
 	// AAA: Takılan ekipmanların buff/efekt Handle'larını (kimliklerini) tutarak temiz bir çıkarma sağlar
 	TMap<EEquipmentSlot, FActiveGameplayEffectHandle> ActiveEquipmentEffects;
+	TMap<EEquipmentSlot, TSoftObjectPtr<class USkeletalMesh>> PendingEquipmentMeshes;
 
 public:
 	// --- WEAPON STATE MACHINE DELEGATE ---

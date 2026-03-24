@@ -17,9 +17,10 @@ void UHeroInputComponent::BeginPlay()
 
 void UHeroInputComponent::InitializeInput(UEnhancedInputComponent* EnhancedInputComponent, ACharacterBase* InOwnerCharacter)
 {
-	if (!EnhancedInputComponent || !InOwnerCharacter) return;
+	if (!ShouldBindInput(EnhancedInputComponent, InOwnerCharacter)) return;
 	
 	OwnerCharacter = InOwnerCharacter;
+	BoundInputComponent = EnhancedInputComponent;
 	BindInputActions(EnhancedInputComponent);
 }
 
@@ -56,6 +57,16 @@ void UHeroInputComponent::BindInputActions(UEnhancedInputComponent* EnhancedInpu
 bool UHeroInputComponent::IsOwnerValid() const
 {
 	return OwnerCharacter != nullptr;
+}
+
+bool UHeroInputComponent::ShouldBindInput(UEnhancedInputComponent* EnhancedInputComponent, ACharacterBase* InOwnerCharacter) const
+{
+	if (!EnhancedInputComponent || !InOwnerCharacter)
+	{
+		return false;
+	}
+
+	return BoundInputComponent.Get() != EnhancedInputComponent || OwnerCharacter != InOwnerCharacter;
 }
 
 // ==============================================================================

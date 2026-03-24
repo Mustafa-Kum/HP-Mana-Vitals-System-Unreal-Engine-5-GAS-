@@ -8,13 +8,9 @@ void UPlayerVitalsWidget::InitializeVitals(UAbilitySystemComponent* InASC)
 {
 	if (!InASC) return;
 
+	UnbindFromAbilitySystem();
 	CachedASC = InASC;
-
-	// Bind reactive delegates — UI updates only when attribute values actually change (AAA: Zero Tick cost)
-	CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetHealthAttribute()).AddUObject(this, &UPlayerVitalsWidget::OnHealthChanged);
-	CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetMaxHealthAttribute()).AddUObject(this, &UPlayerVitalsWidget::OnMaxHealthChanged);
-	CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetManaAttribute()).AddUObject(this, &UPlayerVitalsWidget::OnManaChanged);
-	CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetMaxManaAttribute()).AddUObject(this, &UPlayerVitalsWidget::OnMaxManaChanged);
+	BindToAbilitySystem(CachedASC);
 
 	// Initial display refresh with current attribute values
 	UpdateHealthDisplay();
@@ -39,14 +35,7 @@ void UPlayerVitalsWidget::NativeConstruct()
 
 void UPlayerVitalsWidget::NativeDestruct()
 {
-	// AAA: Clean up delegates to prevent dangling pointers on UI destruction
-	if (CachedASC)
-	{
-		CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetHealthAttribute()).RemoveAll(this);
-		CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetMaxHealthAttribute()).RemoveAll(this);
-		CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetManaAttribute()).RemoveAll(this);
-		CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetMaxManaAttribute()).RemoveAll(this);
-	}
+	UnbindFromAbilitySystem();
 
 	Super::NativeDestruct();
 }
@@ -54,6 +43,12 @@ void UPlayerVitalsWidget::NativeDestruct()
 void UPlayerVitalsWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+
+	if (!HasActiveInterpolation())
+	{
+		return;
+	}
+
 	ProcessAllInterpolations(InDeltaTime);
 }
 
@@ -115,6 +110,33 @@ void UPlayerVitalsWidget::OnManaChanged(const FOnAttributeChangeData& Data)
 void UPlayerVitalsWidget::OnMaxManaChanged(const FOnAttributeChangeData& Data)
 {
 	UpdateManaDisplay();
+}
+
+void UPlayerVitalsWidget::BindToAbilitySystem(UAbilitySystemComponent* InASC)
+{
+	if (!InASC)
+	{
+		return;
+	}
+
+	InASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetHealthAttribute()).AddUObject(this, &UPlayerVitalsWidget::OnHealthChanged);
+	InASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetMaxHealthAttribute()).AddUObject(this, &UPlayerVitalsWidget::OnMaxHealthChanged);
+	InASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetManaAttribute()).AddUObject(this, &UPlayerVitalsWidget::OnManaChanged);
+	InASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetMaxManaAttribute()).AddUObject(this, &UPlayerVitalsWidget::OnMaxManaChanged);
+}
+
+void UPlayerVitalsWidget::UnbindFromAbilitySystem()
+{
+	if (!CachedASC)
+	{
+		return;
+	}
+
+	CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetHealthAttribute()).RemoveAll(this);
+	CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetMaxHealthAttribute()).RemoveAll(this);
+	CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetManaAttribute()).RemoveAll(this);
+	CachedASC->GetGameplayAttributeValueChangeDelegate(UCharacterAttributeSet::GetMaxManaAttribute()).RemoveAll(this);
+	CachedASC = nullptr;
 }
 
 // ==============================================================================
@@ -202,4 +224,14 @@ void UPlayerVitalsWidget::ExecuteVitalTextUpdate(UTextBlock* TextBlock, float Cu
 FString UPlayerVitalsWidget::FormatVitalText(float Current, float Max)
 {
 	return FString::Printf(TEXT("%d / %d"), FMath::TruncToInt(Current), FMath::TruncToInt(Max));
+}
+
+bool UPlayerVitalsWidget::HasActiveInterpolation() const
+{
+	const bool bHealthTrailingActive = TrailingHealthBar && !FMath::IsNearlyEqual(TrailingHealthBar->GetPercent(), TargetHealthPercent, KINDA_SMALL_NUMBER);
+	const bool bManaTrailingActive = TrailingManaBar && !FMath::IsNearlyEqual(TrailingManaBar->GetPercent(), TargetManaPercent, KINDA_SMALL_NUMBER);
+	const bool bHealthMainActive = HealthBar && !FMath::IsNearlyEqual(HealthBar->GetPercent(), TargetHealthPercent, KINDA_SMALL_NUMBER);
+	const bool bManaMainActive = ManaBar && !FMath::IsNearlyEqual(ManaBar->GetPercent(), TargetManaPercent, KINDA_SMALL_NUMBER);
+
+	return bHealthTrailingActive || bManaTrailingActive || bHealthMainActive || bManaMainActive;
 }
