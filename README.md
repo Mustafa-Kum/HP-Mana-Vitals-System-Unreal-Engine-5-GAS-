@@ -1,4 +1,4 @@
-# ⚔️ Building My RPG — Part 3: HP & Mana Vitals System (Unreal Engine 5 / GAS)
+# ⚔️ Building My RPG — Part 2: HP & Mana Vitals System (Unreal Engine 5 / GAS)
 
 This is Part 3 of my ongoing series where I'm building a modular RPG framework in Unreal Engine 5, one gameplay system at a time.
 
