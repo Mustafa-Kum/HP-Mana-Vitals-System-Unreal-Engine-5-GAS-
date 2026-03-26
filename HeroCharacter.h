@@ -2,11 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "Characters/CharacterBase.h"
-#include "Components/CombatComponent.h"
 #include "InputActionValue.h"
 #include "HeroCharacter.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnInventoryToggled);
+
+class UCombatComponent;
 
 UCLASS()
 class WOWCLONE_API AHeroCharacter : public ACharacterBase
@@ -38,11 +39,6 @@ public:
 	virtual void ToggleCombat() override;
 	virtual void ToggleInventory() override;
 	virtual void TestVitals() override;
-	virtual void ResetCombatComboState() override;
-	virtual void SetComboAdvanceWindowEnabled(bool bEnabled) override;
-	virtual void SetAttackMoveInterruptWindowEnabled(bool bEnabled) override;
-	virtual void SetAttackMoveInterruptBlendOutTime(float BlendOutTime) override;
-	virtual void TryInterruptAttackForMovement() override;
 
 private:
 	/** --- COMPONENTS (AAA Layout) --- */

@@ -5,6 +5,8 @@
 #include "AbilitySystemComponent.h"
 #include "Abilities/AttributeSets/CharacterAttributeSet.h"
 #include "WoWCloneGameplayTags.h"
+#include "Components/CombatFeedbackComponent.h"
+#include "Components/DamageReceiverComponent.h"
 #include "Engine/AssetManager.h"
 #include "Engine/StreamableManager.h"
 
@@ -23,6 +25,9 @@ ACharacterBase::ACharacterBase()
 	// Weapon Component Kurulumu (AAA: Varsayılan olarak çarpışmaları kapalı tutuyoruz)
 	WeaponMeshComp = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("WeaponMeshComp"));
 	WeaponMeshComp->SetupAttachment(GetMesh()); // Varsayılan olarak kemik belirsiz, dinamik bağlanacak
+
+	CombatFeedbackComp = CreateDefaultSubobject<UCombatFeedbackComponent>(TEXT("CombatFeedbackComponent"));
+	DamageReceiverComp = CreateDefaultSubobject<UDamageReceiverComponent>(TEXT("DamageReceiverComponent"));
 	
 	// Çarpışmaları tamamen kapatıyoruz ki mermi sektirmesin, kamerayı sarsmasın veya karakteri itmesin
 	WeaponMeshComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -72,6 +77,20 @@ void ACharacterBase::BeginPlay()
 	}
 }
 
+float ACharacterBase::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
+{
+	const float AppliedDamage = DamageReceiverComp
+		? DamageReceiverComp->ReceiveDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser)
+		: 0.0f;
+
+	if (CombatFeedbackComp)
+	{
+		CombatFeedbackComp->HandleReceivedDamage(AppliedDamage, DamageEvent);
+	}
+	Super::TakeDamage(AppliedDamage, DamageEvent, EventInstigator, DamageCauser);
+	return AppliedDamage;
+}
+
 UAbilitySystemComponent* ACharacterBase::GetAbilitySystemComponent() const
 {
 	return AbilitySystemComponent;
@@ -104,6 +123,11 @@ void ACharacterBase::InitializeCharacterStats()
 		FallbackStats.BaseMaxMana = 100.0f;
 		ApplyStartingStats(FallbackStats);
 	}
+}
+
+UPrimitiveComponent* ACharacterBase::GetMeleeHitCollisionComponent() const
+{
+	return WeaponMeshComp;
 }
 
 void ACharacterBase::ApplyStartingStats(const FCharacterStartingStats& Stats)
@@ -250,6 +274,7 @@ void ACharacterBase::OnWeaponEquipNotify()
 {
 	if (CanProcessWeaponNotify())
 	{
+		SetMeleeHitCollisionEnabled(false);
 		bWantsWeaponArmed = 1;
 		AttachWeaponToSocket(GetDesiredWeaponSocketName(CurrentWeaponData));
 		SetArmedState(true);
@@ -263,6 +288,7 @@ void ACharacterBase::OnWeaponUnequipNotify()
 	// Animasyon o frame'e geldiğinde (Kılıç sırta girdiği an) çalışır
 	if (CanProcessWeaponNotify())
 	{
+		SetMeleeHitCollisionEnabled(false);
 		bWantsWeaponArmed = 0;
 		AttachWeaponToSocket(GetDesiredWeaponSocketName(CurrentWeaponData));
 		SetArmedState(false);
@@ -275,6 +301,7 @@ void ACharacterBase::ClearWeaponMesh()
 {
 	if (WeaponMeshComp)
 	{
+		SetMeleeHitCollisionEnabled(false);
 		WeaponMeshComp->SetStaticMesh(nullptr);
 	}
 	CurrentWeaponData = nullptr;
@@ -287,7 +314,28 @@ void ACharacterBase::ClearWeaponMesh()
 
 bool ACharacterBase::CanProcessWeaponNotify() const
 {
-	return CurrentWeaponData != nullptr && WeaponMeshComp != nullptr;
+	if (!WeaponMeshComp)
+	{
+		return false;
+	}
+
+	return CurrentWeaponData != nullptr;
+}
+
+void ACharacterBase::SetMeleeHitCollisionEnabled(bool bEnabled)
+{
+	if (!WeaponMeshComp)
+	{
+		return;
+	}
+
+	const bool bShouldEnable = bEnabled
+		&& CurrentWeaponData != nullptr
+		&& WeaponMeshComp->GetStaticMesh() != nullptr
+		&& HasWeaponEquipped();
+
+	WeaponMeshComp->SetCollisionEnabled(bShouldEnable ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+	WeaponMeshComp->SetGenerateOverlapEvents(bShouldEnable);
 }
 
 void ACharacterBase::AttachWeaponToSocket(FName SocketName)

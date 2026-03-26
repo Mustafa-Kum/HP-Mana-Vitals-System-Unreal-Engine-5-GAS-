@@ -9,6 +9,9 @@
 // AAA: Forward declare enum to minimize header coupling (avoid pulling entire DataAsset header into every Character include)
 enum class EWeaponType : uint8;
 enum class EEquipmentSlot : uint8;
+class UCombatComponent;
+class UCombatFeedbackComponent;
+class UDamageReceiverComponent;
 #include "CharacterBase.generated.h"
 
 // AAA: Delegate for weapon state machine — CharacterBase broadcasts, InventoryComponent listens (DIP)
@@ -26,6 +29,8 @@ protected:
 	virtual void BeginPlay() override;
 
 public:
+	virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser) override;
+
 	// IAbilitySystemInterface
 	[[nodiscard]] virtual class UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
@@ -80,20 +85,13 @@ public:
 	virtual void ToggleInventory() {}
 	virtual void TestVitals() {}
 
-	// --- ANIMATION-COMBAT HOOKS ---
-	virtual void ResetCombatComboState() {}
-	virtual void SetComboAdvanceWindowEnabled(bool bEnabled) {}
-	virtual void SetAttackMoveInterruptWindowEnabled(bool bEnabled) {}
-	virtual void SetAttackMoveInterruptBlendOutTime(float BlendOutTime) {}
-	virtual void TryInterruptAttackForMovement() {}
-
 	// InventoryComponent tetikler, montaj süresince bekleyeceğimiz hedef silahı kaydeder
 	virtual void SetPendingWeapon(class UWeaponDataAsset* InitialWeaponData);
 
 protected:
 	// Async Asset Loading Callbacks (AAA Standard)
 	virtual void OnWeaponMeshLoaded(class UWeaponDataAsset* LoadedWeaponData);
-	
+
 	[[nodiscard]] bool IsWeaponLoadValid(class UWeaponDataAsset* LoadedWeaponData) const;
 	void ApplyWeaponMesh(class UWeaponDataAsset* LoadedWeaponData);
 	void AttachLoadedWeaponToDesiredSocket(class UWeaponDataAsset* LoadedWeaponData);
@@ -105,8 +103,12 @@ protected:
 	FActiveGameplayEffectHandle ApplyGameplayEffectFromItem(class UItemDataAsset* ItemData);
 
 private:
+	friend class UCombatComponent;
+
 	// DRY Helpers: Eliminate duplication between Equip/Unequip notify methods
 	[[nodiscard]] bool CanProcessWeaponNotify() const;
+	[[nodiscard]] class UPrimitiveComponent* GetMeleeHitCollisionComponent() const;
+	void SetMeleeHitCollisionEnabled(bool bEnabled);
 	void AttachWeaponToSocket(FName SocketName);
 	[[nodiscard]] FName GetDesiredWeaponSocketName(const class UWeaponDataAsset* WeaponData) const;
 	void SetArmedState(bool bIsArmed);
@@ -150,10 +152,16 @@ private:
 	void ClearEquipmentMesh(EEquipmentSlot Slot);
 	[[nodiscard]] class USkeletalMeshComponent* GetMeshComponentForSlot(EEquipmentSlot Slot) const;
 
-	// Silahı karakterin modelinde tutacağımız Component (AAA Standartı: Her zaman kapalı collision)
+	// Silahı karakterin modelinde tutacağımız Component (AAA Standartı: Varsayılan olarak collision kapalı)
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Weapon", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<class UStaticMeshComponent> WeaponMeshComp;
-	
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Feedback", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCombatFeedbackComponent> CombatFeedbackComp;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Damage", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UDamageReceiverComponent> DamageReceiverComp;
+
 	// Karakterin şu an hedeflediği veya tuttuğu silahın referansı
 	UPROPERTY(Transient)
 	TObjectPtr<class UWeaponDataAsset> CurrentWeaponData;

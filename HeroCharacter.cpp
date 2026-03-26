@@ -8,6 +8,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/InventoryComponent.h"
+#include "Components/CombatComponent.h"
 #include "DataAssets/WeaponDataAsset.h"
 #include "AbilitySystemComponent.h"
 #include "Abilities/AttributeSets/CharacterAttributeSet.h"
@@ -154,7 +155,10 @@ void AHeroCharacter::Move(const FInputActionValue& Value)
 	const FVector2D ProcessedInput = HeroLocomotionComp->GetNormalizedAndScaledMovementInput(Value.Get<FVector2D>());
 	if (ProcessedInput.IsNearlyZero()) return;
 
-	TryInterruptAttackForMovement();
+	if (CombatComp)
+	{
+		CombatComp->TryInterruptAttackForMovement();
+	}
 
 	AddMovementInput(GetMovementDirection(EAxis::X), ProcessedInput.X);
 	AddMovementInput(GetMovementDirection(EAxis::Y), ProcessedInput.Y);
@@ -431,45 +435,5 @@ void AHeroCharacter::TestVitals()
 		// Directly deduct 20 HP and 20 Mana for testing UI smoothness
 		ASC->ApplyModToAttributeUnsafe(UCharacterAttributeSet::GetHealthAttribute(), EGameplayModOp::Additive, -20.0f);
 		ASC->ApplyModToAttributeUnsafe(UCharacterAttributeSet::GetManaAttribute(), EGameplayModOp::Additive, -20.0f);
-	}
-}
-
-void AHeroCharacter::ResetCombatComboState()
-{
-	if (CombatComp)
-	{
-		CombatComp->ResetCombo();
-	}
-}
-
-void AHeroCharacter::SetComboAdvanceWindowEnabled(bool bEnabled)
-{
-	if (CombatComp)
-	{
-		CombatComp->SetCanAdvanceCombo(bEnabled);
-	}
-}
-
-void AHeroCharacter::SetAttackMoveInterruptWindowEnabled(bool bEnabled)
-{
-	if (CombatComp)
-	{
-		CombatComp->SetCanInterruptAttackForMovement(bEnabled);
-	}
-}
-
-void AHeroCharacter::SetAttackMoveInterruptBlendOutTime(float BlendOutTime)
-{
-	if (CombatComp)
-	{
-		CombatComp->SetAttackInterruptBlendOutTime(BlendOutTime);
-	}
-}
-
-void AHeroCharacter::TryInterruptAttackForMovement()
-{
-	if (CombatComp)
-	{
-		CombatComp->TryInterruptAttackForMovement();
 	}
 }
